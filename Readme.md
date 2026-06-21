@@ -1,3 +1,15 @@
+## Running the Code 
+```
+>>>>> c++
+mkdir build
+clang++ -O3 mandelbrot.cpp -o build/mandelbrot
+./build/mandelbrot -res_x 7680 -res_y 4320 -depth 100000
+
+>>>>> python
+pip install numpy numba
+python mandelbrot.py -res_x 7680 -res_y 4320 -depth 100000
+```
+
 ## Comparison Operations
 | Operation             | NEON Intrinsic   | Scalar Equivalent |
 | --------------------- | ---------------- | ----------------- |
