@@ -9,65 +9,106 @@
 
 using namespace std;
 
-void calculate_mandelbrot(int width, int height, int maxIter, 
-                          double x_start, double x_fin, 
-                          double y_start, double y_fin, 
-                          std::vector<int>& buffer) 
+uint64x2_t mandelbrot_neon(float64x2_t c_re,
+                           float64x2_t c_im,
+                           int maxIter)
+{
+    float64x2_t four = vdupq_n_f64(4.0);
+    float64x2_t two  = vdupq_n_f64(2.0);
+    uint64x2_t ones  = vdupq_n_u64(1);
+
+    // Start z = c (same as your scalar function)
+    float64x2_t z_re = c_re;
+    float64x2_t z_im = c_im;
+
+    uint64x2_t iters = vdupq_n_u64(0);
+
+    for (int iter = 0; iter < maxIter; ++iter)
+    {
+        float64x2_t z_re2 = vmulq_f64(z_re, z_re);
+        float64x2_t z_im2 = vmulq_f64(z_im, z_im);
+
+        float64x2_t mag2 = vaddq_f64(z_re2, z_im2);
+
+        uint64x2_t mask = vcleq_f64(mag2, four);
+
+        // Both points escaped
+        if (vgetq_lane_u64(mask, 0) == 0 &&
+            vgetq_lane_u64(mask, 1) == 0)
+        {
+            break;
+        }
+
+        // Increment only active points
+        iters = vaddq_u64(iters, vandq_u64(mask, ones));
+
+        // z = z² + c
+        float64x2_t z_im_new =
+            vaddq_f64(vmulq_f64(two, vmulq_f64(z_re, z_im)), c_im);
+
+        float64x2_t z_re_new =
+            vaddq_f64(vsubq_f64(z_re2, z_im2), c_re);
+
+        // Update only active lanes (mask & z_re_new) | (~mask & z_re)
+        z_re = vreinterpretq_f64_u64(
+                    vbslq_u64(mask,
+                              vreinterpretq_u64_f64(z_re_new),
+                              vreinterpretq_u64_f64(z_re)));
+
+        // Update only active lanes (mask & z_im_new) | (~mask & z_im)
+        z_im = vreinterpretq_f64_u64(
+                    vbslq_u64(mask,
+                              vreinterpretq_u64_f64(z_im_new),
+                              vreinterpretq_u64_f64(z_im)));
+    }
+
+    return iters;
+}
+
+
+void calculate_mandelbrot(int width,
+                          int height,
+                          int maxIter,
+                          double x_start,
+                          double x_fin,
+                          double y_start,
+                          double y_fin,
+                          std::vector<int>& buffer)
 {
     double dx = (x_fin - x_start) / (width - 1);
     double dy = (y_fin - y_start) / (height - 1);
 
-    // dispatch_apply runs the loop simultaneously across all CPU cores
-    dispatch_apply(height, DISPATCH_APPLY_AUTO, ^(size_t i) {
-        
-        // Setup NEON registers inside the thread block
-        float64x2_t four = vdupq_n_f64(4.0);
-        float64x2_t two  = vdupq_n_f64(2.0);
-        uint64x2_t  ones = vdupq_n_u64(1); 
-
+    dispatch_apply(height, DISPATCH_APPLY_AUTO, ^(size_t i)
+    {
         double y = y_fin - i * dy;
         float64x2_t c_im = vdupq_n_f64(y);
 
-        for (int j = 0; j < width; j += 2) { 
-            double c_re_arr[2] = { x_start + j * dx, x_start + (j + 1) * dx };
+        for (int j = 0; j < width; j += 2)
+        {
+            double c_re_arr[2] =
+            {
+                x_start + j * dx,
+                x_start + (j + 1) * dx
+            };
+
             float64x2_t c_re = vld1q_f64(c_re_arr);
 
-            float64x2_t z_re = c_re;
-            float64x2_t z_im = c_im;
-            uint64x2_t iters = vdupq_n_u64(0); 
+            uint64x2_t iters = mandelbrot_neon(c_re, c_im, maxIter);
 
-            for (int iter = 0; iter < maxIter; ++iter) {
-                float64x2_t z_re2 = vmulq_f64(z_re, z_re);
-                float64x2_t z_im2 = vmulq_f64(z_im, z_im);
-                float64x2_t r2_plus_i2 = vaddq_f64(z_re2, z_im2);
+            uint64_t result[2];
+            vst1q_u64(result, iters);
 
-                uint64x2_t mask = vcleq_f64(r2_plus_i2, four);
+            buffer[i * width + j] = static_cast<int>(result[0]);
 
-                if (vgetq_lane_u64(mask, 0) == 0 && vgetq_lane_u64(mask, 1) == 0) {
-                    break;
-                }
-
-                iters = vaddq_u64(iters, vandq_u64(mask, ones));
-
-                float64x2_t z_im_new = vaddq_f64(vmulq_f64(two, vmulq_f64(z_re, z_im)), c_im);
-                float64x2_t z_re_new = vaddq_f64(vsubq_f64(z_re2, z_im2), c_re);
-
-                z_re = vreinterpretq_f64_u64(vbslq_u64(mask, vreinterpretq_u64_f64(z_re_new), vreinterpretq_u64_f64(z_re)));
-                z_im = vreinterpretq_f64_u64(vbslq_u64(mask, vreinterpretq_u64_f64(z_im_new), vreinterpretq_u64_f64(z_im)));
-            }
-
-            uint64_t results[2];
-            vst1q_u64(results, iters);
-
-            buffer[i * width + j] = static_cast<int>(results[0]);
-            
-            // Bounds check in case user enters an odd width (e.g. 1921)
-            if (j + 1 < width) {
-                buffer[i * width + j + 1] = static_cast<int>(results[1]);
+            if (j + 1 < width)
+            {
+                buffer[i * width + j + 1] =
+                    static_cast<int>(result[1]);
             }
         }
     });
 }
+
 
 void write_image(const std::string& filename, int width, int height, int maxIter, const std::vector<int>& buffer) {
     std::ofstream img(filename, std::ios::binary);
