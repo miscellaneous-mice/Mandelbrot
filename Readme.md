@@ -10,6 +10,10 @@ pip install numpy numba
 python mandelbrot.py -res_x 7680 -res_y 4320 -depth 100000
 ```
 
+## Mandelbrot Wiki
+- [Reference Code](https://github.com/dario-marvin/Mandelbrot)
+- [Mandelbrot explained](https://youtu.be/7MotVcGvFMg?si=6l3wKMpRyWnk9X4K)
+
 ## Comparison Operations
 | Operation             | NEON Intrinsic   | Scalar Equivalent |
 | --------------------- | ---------------- | ----------------- |
